@@ -57,7 +57,7 @@ class Util:
     """
 
     @staticmethod
-    def get_file_list(shortFile):
+    def get_file_list(shortFile, options):
         """
         The function get_file_list expands a short filename to a sorted list
         of filenames. The short filename can contain variables and wildcards.
@@ -74,18 +74,19 @@ class Util:
         if len(fileList) != 0:
             fileList.sort()
         else:
-            print ('\nWarning: no file matches "{0}".'.format(shortFile))
+            if not options.print_html:
+                print ('\nWarning: no file matches "{0}".'.format(shortFile))
 
         return fileList
 
 
     @staticmethod
-    def extend_file_list(filelist):
+    def extend_file_list(filelist,options):
         '''
         This function takes a list of files, expands wildcards
         and returns a new list of files.
         '''
-        return [file for wildcardFile in filelist for file in Util.get_file_list(wildcardFile)]
+        return [file for wildcardFile in filelist for file in Util.get_file_list(wildcardFile,options)]
 
 
     @staticmethod
@@ -203,7 +204,7 @@ class Util:
         return uniqueList[0] if len(uniqueList) == 1 \
             else '[' + '; '.join(uniqueList) + ']'
 
-def parse_table_definition_file(file, all_columns):
+def parse_table_definition_file(file, all_columns, options):
     '''
     This function parses the input to get run sets and columns.
     The param 'file' is an XML file defining the result files and columns.
@@ -214,7 +215,8 @@ def parse_table_definition_file(file, all_columns):
 
     @return: a list of RunSetResult objects
     '''
-    print ("reading table definition from '{0}'...".format(file))
+    if not options.print_html:
+        print ("reading table definition from '{0}'...".format(file))
     if not os.path.isfile(file):
         print ('File {0!r} does not exist.'.format(file))
         exit()
@@ -238,21 +240,22 @@ def parse_table_definition_file(file, all_columns):
 
     base_dir = os.path.dirname(file)
 
-    def getResultTags(rootTag):
+    def getResultTags(rootTag, options):
         tags = rootTag.findall('result')
         if not tags:
             tags = rootTag.findall('test')
-            if tags:
+            if tags and not options.print_html:
                 print("Warning: file {0} contains deprecated 'test' tags, rename them to 'result'".format(file))
         return tags
 
     for resultTag in getResultTags(tableGenFile):
         if not 'filename' in resultTag.attrib:
-            print('Result tag without filename attribute in {0}.'.format(file))
+            if not options.print_html:
+                print('Result tag without filename attribute in {0}.'.format(file))
             continue
         columnsToShow = extract_columns_from_table_definition_file(resultTag) or defaultColumnsToShow
-        filelist = Util.get_file_list(os.path.join(base_dir, resultTag.get('filename'))) # expand wildcards
-        runSetResults += [RunSetResult.create_from_xml(resultsFile, parse_results_file(resultsFile), columnsToShow, all_columns) for resultsFile in filelist]
+        filelist = Util.get_file_list(os.path.join(base_dir, resultTag.get('filename')), options) # expand wildcards
+        runSetResults += [RunSetResult.create_from_xml(resultsFile, parse_results_file(resultsFile, options), options, columnsToShow, all_columns) for resultsFile in filelist]
 
     for unionTag in tableGenFile.findall('union'):
         columnsToShow = extract_columns_from_table_definition_file(unionTag) or defaultColumnsToShow
@@ -260,11 +263,12 @@ def parse_table_definition_file(file, all_columns):
 
         for resultTag in getResultTags(unionTag):
             if not 'filename' in resultTag.attrib:
-                print('Result tag without filename attribute in {0}.'.format(file))
+                if not options.print_html:
+                    print('Result tag without filename attribute in {0}.'.format(file))
                 continue
-            filelist = Util.get_file_list(os.path.join(base_dir, resultTag.get('filename'))) # expand wildcards
+            filelist = Util.get_file_list(os.path.join(base_dir, resultTag.get('filename')), options) # expand wildcards
             for resultsFile in filelist:
-                result.append(resultsFile, parse_results_file(resultsFile), all_columns)
+                result.append(resultsFile, parse_results_file(resultsFile, options), all_columns)
 
         if result.filelist:
             name = unionTag.get('title', unionTag.get('name'))
@@ -305,11 +309,12 @@ class RunSetResult():
     the sourcefiles tags (with sourcefiles + values), the columns to show
     and the benchmark attributes.
     """
-    def __init__(self, filelist, attributes, columns, summary={}):
+    def __init__(self, filelist, attributes, columns, options, summary={}):
         self.filelist = filelist
         self.attributes = attributes
         self.columns = columns
         self.summary = summary
+        self.options = options
 
     def get_tasks(self):
         return list(map(get_task_id, self.filelist))
@@ -320,10 +325,10 @@ class RunSetResult():
             self.attributes[attrib].extend(values)
 
         if not self.columns:
-            self.columns = RunSetResult._extract_existing_columns_from_result(resultFile, resultElem, all_columns)
+            self.columns = RunSetResult._extract_existing_columns_from_result(resultFile, resultElem, all_columns,self.options)
 
     @staticmethod
-    def create_from_xml(resultFile, resultElem, columns=None, all_columns=False):
+    def create_from_xml(resultFile, resultElem, options, columns=None, all_columns=False):
         '''
         This function extracts everything necessary for creating a RunSetResult object
         from the "result" XML tag of a benchmark result file.
@@ -332,7 +337,7 @@ class RunSetResult():
         attributes = RunSetResult._extract_attributes_from_result(resultFile, resultElem)
 
         if not columns:
-            columns = RunSetResult._extract_existing_columns_from_result(resultFile, resultElem, all_columns)
+            columns = RunSetResult._extract_existing_columns_from_result(resultFile, resultElem, all_columns, options)
 
         summary = RunSetResult._extract_summary_from_result(resultElem, columns)
 
@@ -340,10 +345,11 @@ class RunSetResult():
                 attributes, columns, summary)
 
     @staticmethod
-    def _extract_existing_columns_from_result(resultFile, resultElem, all_columns):
+    def _extract_existing_columns_from_result(resultFile, resultElem, all_columns, options):
         run_results = _get_run_tags_from_xml(resultElem)
         if not run_results:
-            print("Empty resultfile found: " + resultFile)
+            if not options.print_html:
+                print("Empty resultfile found: " + resultFile)
             return []
         else: # show all available columns
             columnNames = set()
@@ -399,7 +405,7 @@ def _get_run_tags_from_xml(result_elem):
     return result_elem.findall('run') + result_elem.findall('sourcefile')
 
 
-def parse_results_file(resultFile):
+def parse_results_file(resultFile, options):
     '''
     This function parses a XML file with the results of the execution of a run set.
     It returns the "result" XML tag
@@ -408,7 +414,8 @@ def parse_results_file(resultFile):
         print ('File {0!r} is not found.'.format(resultFile))
         exit()
 
-    print ('    ' + resultFile)
+    if not options.print_html:
+        print ('    ' + resultFile)
 
     resultElem = ET.ElementTree().parse(resultFile)
 
@@ -446,7 +453,7 @@ def insert_logfile_names(resultFile, resultElem):
         sourcefile.set('logfile', log_folder + log_file_name)
 
 
-def merge_tasks(runset_results):
+def merge_tasks(runset_results, options):
     """
     This function merges the filelists of all RunSetResult objects.
     If necessary, it can merge lists of names: [A,C] + [A,B] --> [A,B,C]
@@ -461,7 +468,8 @@ def merge_tasks(runset_results):
         currentresult_taskset = set()
         for task in result.get_tasks():
             if task in currentresult_taskset:
-                print ("File {0} is present twice, skipping it.".format(task[0]))
+                if not options.print_html:
+                    print ("File {0} is present twice, skipping it.".format(task[0]))
             else:
                 currentresult_taskset.add(task)
                 if task not in task_set:
@@ -471,10 +479,10 @@ def merge_tasks(runset_results):
                 else:
                     index = task_list.index(task)
 
-    merge_task_lists(runset_results, task_list)
+    merge_task_lists(runset_results, task_list, options)
     return task_list
 
-def merge_task_lists(runset_results, tasks):
+def merge_task_lists(runset_results, tasks, options):
     """
     Set the filelists of all RunSetResult elements so that they contain the same files
     in the same order. For missing files a dummy element is inserted.
@@ -489,11 +497,12 @@ def merge_task_lists(runset_results, tasks):
                 task_result = ET.Element('run') # create an empty dummy element
                 task_result.set('logfile', None)
                 task_result.set('name', task[0])
-                print ('    no result for {0}'.format(task[0]))
+                if not options.print_html:
+                    print ('    no result for {0}'.format(task[0]))
             result.filelist.append(task_result)
 
 
-def find_common_tasks(runset_results):
+def find_common_tasks(runset_results, options):
     tasks_in_first_runset = runset_results[0].get_tasks()
 
     task_set = set(tasks_in_first_runset)
@@ -502,10 +511,11 @@ def find_common_tasks(runset_results):
 
     task_list = []
     if not task_set:
-        print('No files are present in all benchmark results.')
+        if not options.print_html:
+            print('No files are present in all benchmark results.')
     else:
         task_list = [task for task in tasks_in_first_runset if task in task_set]
-        merge_task_lists(runset_results, task_list)
+        merge_task_lists(runset_results, task_list, options)
 
     return task_list
 
@@ -523,7 +533,7 @@ class RunResult:
         self.category = category
 
     @staticmethod
-    def create_from_xml(sourcefileTag, get_value_from_logfile, listOfColumns, correct_only):
+    def create_from_xml(sourcefileTag, get_value_from_logfile, options, listOfColumns, correct_only):
         '''
         This function collects the values from one run.
         Only columns that should be part of the table are collected.
@@ -535,7 +545,8 @@ class RunResult:
                 with open(logfilename, 'rt') as logfile:
                     return logfile.readlines()
             except IOError as e:
-                print('WARNING: Could not read value from logfile: {}'.format(e))
+                if not options.print_html:
+                    print('WARNING: Could not read value from logfile: {}'.format(e))
                 return []
 
         status = Util.get_column_value(sourcefileTag, 'status', '')
@@ -603,26 +614,29 @@ def rows_to_columns(rows):
     return zip(*[row.results for row in rows])
 
 
-def get_rows(runSetResults, task_ids, correct_only):
+def get_rows(runSetResults, task_ids, correct_only, options):
     """
     Create list of rows with all data. Each row consists of several RunResults.
     """
 
-    def load_tool(result):
+    def load_tool(result, options):
         """
         Load the module with the tool-specific code.
         """
         tool_module = result.attributes['toolmodule'][0] if 'toolmodule' in result.attributes else None
         if not tool_module:
-            print('Cannot extract values from log files for benchmark results {0} (missing attribute "toolmodule" on tag "result").'.format(
+            if not options.print_html:
+                print('Cannot extract values from log files for benchmark results {0} (missing attribute "toolmodule" on tag "result").'.format(
                     Util.prettylist(result.attributes['name'])))
             return None
         try:
             return __import__(tool_module, fromlist=['Tool']).Tool()
         except ImportError as ie:
-            print('Missing module "{0}", cannot extract values from log files (ImportError: {1}).'.format(tool_module, ie))
+            if not options.print_html:
+                print('Missing module "{0}", cannot extract values from log files (ImportError: {1}).'.format(tool_module, ie))
         except AttributeError:
-            print('The module "{0}" does not define the necessary class Tool, cannot extract values from log files.'.format(tool_module))
+            if not options.print_html:
+                print('The module "{0}" does not define the necessary class Tool, cannot extract values from log files.'.format(tool_module))
         return None
 
     rows = [Row(task_id) for task_id in task_ids]
@@ -649,13 +663,14 @@ def get_rows(runSetResults, task_ids, correct_only):
             row.add_run_result(RunResult.create_from_xml(
                     fileResult,
                     get_value_from_logfile,
+                    options,
                     result.columns,
                     correct_only))
 
     return rows
 
 
-def filter_rows_with_differences(rows):
+def filter_rows_with_differences(rows, options):
     """
     Find all rows with differences in the status column.
     """
@@ -672,9 +687,9 @@ def filter_rows_with_differences(rows):
 
     rowsDiff = [row for row in rows if not all_equal_result(row.results)]
 
-    if len(rowsDiff) == 0:
+    if len(rowsDiff) == 0 and not options.print_html:
         print ("---> NO DIFFERENCE FOUND IN COLUMN 'STATUS'")
-    elif len(rowsDiff) == len(rows):
+    elif len(rowsDiff) == len(rows) and not options.print_html:
         print ("---> DIFFERENCES FOUND IN ALL ROWS, NO NEED TO CREATE DIFFERENCE TABLE")
         return []
 
@@ -734,8 +749,8 @@ def get_table_head(runSetResults, commonFileNamePrefix):
             'title':   titleRow}
 
 
-def get_stats(rows):
-    stats = [get_stats_of_run_set(runResults) for runResults in rows_to_columns(rows)] # column-wise
+def get_stats(rows, options):
+    stats = [get_stats_of_run_set(runResults, options) for runResults in rows_to_columns(rows)] # column-wise
     rowsForStats = list(map(Util.flatten, zip(*stats))) # row-wise
 
     # Calculate maximal score and number of true/false files for the given properties
@@ -744,7 +759,8 @@ def get_stats(rows):
         if not row.properties:
             # properties missing for at least one task, result would be wrong
             count_true = count_false = 0
-            print('Missing property for ' + row.filename)
+            if not options.print_html:
+                print('Missing property for ' + row.filename)
             break
         correct_result = result.satisfies_file_property(row.filename, row.properties.split())
         if correct_result is True:
@@ -777,7 +793,7 @@ def get_stats(rows):
             ]
 
 
-def get_stats_of_run_set(runResults):
+def get_stats_of_run_set(runResults, options):
     """
     This function returns the numbers of the statistics.
     @param runResults: All the results of the execution of one run set (as list of RunResult objects)
@@ -820,7 +836,7 @@ def get_stats_of_run_set(runResults):
             wrongFalse = StatValue(countWrongFalse)
 
         else:
-            sum, correct, correctTrue, correctFalse, incorrect, wrongTrue, wrongFalse = get_stats_of_number_column(values, statusList, column.title)
+            sum, correct, correctTrue, correctFalse, incorrect, wrongTrue, wrongFalse = get_stats_of_number_column(values, statusList, column.title, options)
             score = ''
 
         if (sum.sum, correct.sum, correctTrue.sum, correctFalse.sum, incorrect.sum, wrongTrue.sum, wrongFalse.sum) == (0,0,0,0,0,0,0):
@@ -913,12 +929,12 @@ def get_category_count(categoryList):
             )
 
 
-def get_stats_of_number_column(values, categoryList, columnTitle):
+def get_stats_of_number_column(values, categoryList, columnTitle, options):
     assert len(values) == len(categoryList)
     try:
         valueList = [Util.to_decimal(v) for v in values]
     except InvalidOperation as e:
-        if columnTitle != "host": # we ignore values of column host, used in cloud-mode
+        if columnTitle != "host" and not options.print_html: # we ignore values of column host, used in cloud-mode
             print("Warning: {0}. Statistics may be wrong.".format(e))
         return (StatValue(0), StatValue(0), StatValue(0), StatValue(0), StatValue(0), StatValue(0), StatValue(0))
 
@@ -1030,8 +1046,8 @@ def create_tables(name, runSetResults, task_ids, rows, rowsDiff, outputPath, out
                        'remove_unit': Util.remove_unit,
                        }
 
-    def write_table(type, title, rows):
-        stats = get_stats(rows)
+    def write_table(type, title, rows, options):
+        stats = get_stats(rows, options)
 
         summary = get_summary(runSetResults)
         if summary and type != 'diff' and not options.correct_only and not options.common:
@@ -1039,7 +1055,8 @@ def create_tables(name, runSetResults, task_ids, rows, rowsDiff, outputPath, out
 
         for format in TEMPLATE_FORMATS:
             outfile = os.path.join(outputPath, outputFilePattern.format(name=name, type=type, ext=format))
-            print ('writing {0} into {1} ...'.format(format.upper().ljust(4), outfile))
+            if not options.print_html:
+                print ('writing {0} into {1} ...'.format(format.upper().ljust(4), outfile))
 
             # read template
             Template = tempita.HTMLTemplate if format == 'html' else tempita.Template
@@ -1052,20 +1069,22 @@ def create_tables(name, runSetResults, task_ids, rows, rowsDiff, outputPath, out
             template = Template(template_content, namespace=templateNamespace)
 
             # write file
-            with open(outfile, 'w') as file:
-                file.write(template.substitute(
-                        title=title,
-                        head=head,
-                        body=rows,
-                        foot=stats,
-                        run_sets=run_sets_data,
-                        columns=run_sets_columns,
-                        columnTitles=run_sets_column_titles,
-                        lib_url=options.lib_url,
-                        base_dir=outputPath,
-                        ))
+            outStr = template.substitute(title=title,
+                                         head=head,
+                                         body=rows,
+                                         foot=stats,
+                                         run_sets=run_sets_data,
+                                         columns=run_sets_columns,
+                                         columnTitles=run_sets_column_titles,
+                                         lib_url=options.lib_url,
+                                         base_dir=outputPath)
+            if not options.print_html:
+                with open(outfile, 'w') as file:
+                    file.write(outStr)
+            elif format == 'html':
+                print(outStr)
 
-            if options.show_table and format == 'html':
+            if options.show_table and format == 'html' and not options.print_html:
                 try:
                     with open(os.devnull, 'w') as devnull:
                         subprocess.Popen(['xdg-open', outfile],
@@ -1074,11 +1093,11 @@ def create_tables(name, runSetResults, task_ids, rows, rowsDiff, outputPath, out
                     pass
 
     # write normal tables
-    write_table("table", name, rows)
+    write_table("table", name, rows, options)
 
     # write difference tables
     if rowsDiff:
-        write_table("diff", name + " differences", rowsDiff)
+        write_table("diff", name + " differences", rowsDiff, options)
 
 def basename_without_ending(file):
     name = os.path.basename(file)
@@ -1162,6 +1181,10 @@ def main(args=None):
         action="store_true", dest="show_table",
         help="Open the produced HTML table(s) in the default browser."
     )
+    parser.add_argument("--printHTML",
+        action="store_true", dest="print_html",
+        help="Prints html output to stdout for use in dynamic pages"
+    )
     parser.add_argument("--version",
         action="version", version="%(prog)s " + __version__
     )
@@ -1188,11 +1211,12 @@ def main(args=None):
             inputFiles = options.tables
         else:
             searchDir = outputPath or DEFAULT_OUTPUT_PATH
-            print ("searching result files in '{}'...".format(searchDir))
+            if not options.print_html:
+                print ("searching result files in '{}'...".format(searchDir))
             inputFiles = [os.path.join(searchDir, '*.results*.xml')]
 
-        inputFiles = Util.extend_file_list(inputFiles) # expand wildcards
-        runSetResults = [RunSetResult.create_from_xml(file, parse_results_file(file), all_columns=options.all_columns) for file in inputFiles]
+        inputFiles = Util.extend_file_list(inputFiles, options) # expand wildcards
+        runSetResults = [RunSetResult.create_from_xml(file, parse_results_file(file, options), options, all_columns=options.all_columns) for file in inputFiles]
 
         if len(inputFiles) == 1:
             if not name:
@@ -1215,7 +1239,7 @@ def main(args=None):
     if options.ignore_errors:
         filteredRunSets = []
         for runSet in runSetResults:
-            if 'error' in runSet.attributes:
+            if 'error' in runSet.attributes and not options.print_html:
                 print('Ignoring benchmark {0} because of error: {1}'
                       .format(", ".join(set(runSet.attributes['name'])),
                               ", ".join(set(runSet.attributes['error']))))
@@ -1227,27 +1251,31 @@ def main(args=None):
         print ('\nError! No benchmark results found.')
         exit()
 
-    print ('merging results ...')
+    if not options.print_html:
+        print ('merging results ...')
     if options.common:
         task_ids = find_common_tasks(runSetResults)
     else:
         # merge list of run sets, so that all run sets contain the same tasks
-        task_ids = merge_tasks(runSetResults)
+        task_ids = merge_tasks(runSetResults, options)
 
     # collect data and find out rows with differences
-    print ('collecting data ...')
-    rows     = get_rows(runSetResults, task_ids, options.correct_only)
+    if not options.print_html:
+        print ('collecting data ...')
+    rows     = get_rows(runSetResults, task_ids, options.correct_only, options)
     if not rows:
         print ('Warning: No results found, no tables produced.')
         sys.exit()
 
-    rowsDiff = filter_rows_with_differences(rows) if options.write_diff_table else []
+    rowsDiff = filter_rows_with_differences(rows, options) if options.write_diff_table else []
 
-    print ('generating table ...')
+    if not options.print_html:
+        print ('generating table ...')
     if not os.path.isdir(outputPath): os.makedirs(outputPath)
     create_tables(name, runSetResults, task_ids, rows, rowsDiff, outputPath, outputFilePattern, options)
 
-    print ('done')
+    if not options.print_html:
+        print ('done')
 
     if options.dump_counts: # print some stats for Buildbot
         print ("REGRESSIONS {}".format(get_regression_count(rows, options.ignoreFlappingTimeouts)))
